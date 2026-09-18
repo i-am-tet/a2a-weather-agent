@@ -1,6 +1,7 @@
 # Starter Weather A2A Agent
 
-A safe A2A-compatible weather demonstration service. It has no API key and deliberately returns sample weather data.
+An A2A-compatible weather service. It uses Open-Meteo's public geocoding and
+forecast APIs, so the starter needs no API key for this demonstration.
 
 ## Run locally
 
@@ -18,4 +19,4 @@ curl http://localhost:10000/.well-known/agent-card.json
 curl -X POST http://localhost:10000/ -H "Content-Type: application/json" -d '{"jsonrpc":"2.0","id":"test-1","method":"message/send","params":{"message":{"role":"user","parts":[{"kind":"text","text":"What is the weather in London?"}]}}}'
 ```
 
-The card describes how another A2A client reaches the JSON-RPC endpoint. Before using this beyond a demo, add authentication, rate limiting, and a real weather provider whose credentials are stored as deployment environment variables.
+The card describes how another A2A client reaches the JSON-RPC endpoint. Before using this beyond a demo, add authentication and rate limiting. Review Open-Meteo's terms and attribution requirements before commercial use.

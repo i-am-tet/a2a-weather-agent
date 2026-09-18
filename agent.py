@@ -7,7 +7,10 @@ weather_reply() with a real provider only after deployment is working.
 import os
 import re
 import uuid
+import json
 from datetime import datetime, timezone
+from urllib.parse import urlencode
+from urllib.request import urlopen
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
@@ -16,14 +19,66 @@ from fastapi.responses import JSONResponse
 app = FastAPI(title="Starter Weather Agent")
 
 
-def weather_reply(question: str) -> str:
-    """Return a clearly labelled non-production response."""
+WEATHER_CODES = {
+    0: "clear sky", 1: "mainly clear", 2: "partly cloudy", 3: "overcast",
+    45: "foggy", 48: "rime fog", 51: "light drizzle", 53: "drizzle",
+    55: "dense drizzle", 61: "light rain", 63: "rain", 65: "heavy rain",
+    71: "light snow", 73: "snow", 75: "heavy snow", 80: "rain showers",
+    81: "rain showers", 82: "violent rain showers", 95: "thunderstorm",
+    96: "thunderstorm with hail", 99: "thunderstorm with heavy hail",
+}
+
+
+def get_json(url: str) -> dict:
+    """Fetch JSON from a public weather endpoint with a short timeout."""
+    with urlopen(url, timeout=10) as response:  # nosec B310: fixed HTTPS hosts below
+        return json.load(response)
+
+
+def location_from_question(question: str) -> str:
     match = re.search(r"(?:in|for)\s+([A-Za-z][A-Za-z .'-]{1,50})", question, re.I)
-    place = match.group(1).strip(" ?.!") if match else "the requested location"
-    return (
-        f"Demo weather result for {place}: sunny, 22°C. "
-        "This is sample data, not a live weather forecast."
-    )
+    return match.group(1).strip(" ?.!") if match else ""
+
+
+def weather_reply(question: str) -> str:
+    """Look up a place and return live current conditions from Open-Meteo."""
+    place = location_from_question(question)
+    if not place:
+        return "Tell me the city or location, for example: What is the weather in London?"
+
+    try:
+        geocoding_url = "https://geocoding-api.open-meteo.com/v1/search?" + urlencode(
+            {"name": place, "count": 1, "language": "en", "format": "json"}
+        )
+        results = get_json(geocoding_url).get("results", [])
+        if not results:
+            return f"I could not find a location matching '{place}'. Please include a city and country."
+
+        location = results[0]
+        forecast_url = "https://api.open-meteo.com/v1/forecast?" + urlencode(
+            {
+                "latitude": location["latitude"],
+                "longitude": location["longitude"],
+                "current": "temperature_2m,apparent_temperature,weather_code,wind_speed_10m",
+                "timezone": "auto",
+            }
+        )
+        current = get_json(forecast_url)["current"]
+        condition = WEATHER_CODES.get(current.get("weather_code"), "unknown conditions")
+        location_name = ", ".join(
+            part for part in (location.get("name"), location.get("country")) if part
+        )
+        return (
+            f"Current weather in {location_name}: {condition}, "
+            f"{current['temperature_2m']}°C (feels like {current['apparent_temperature']}°C), "
+            f"wind {current['wind_speed_10m']} km/h. "
+            "Source: Open-Meteo forecast data."
+        )
+    except Exception:
+        return (
+            "I could not retrieve live weather data right now. "
+            "Please try again in a moment."
+        )
 
 
 def agent_card(request: Request) -> dict:
@@ -31,7 +86,7 @@ def agent_card(request: Request) -> dict:
     return {
         "protocolVersion": "0.3.0",
         "name": "Starter Weather Agent",
-        "description": "A harmless A2A weather demo agent with no API key.",
+        "description": "An A2A weather agent using live Open-Meteo forecast data.",
         "url": base_url + "/",
         "version": "0.1.0",
         "capabilities": {"streaming": False, "pushNotifications": False},
@@ -41,7 +96,7 @@ def agent_card(request: Request) -> dict:
             {
                 "id": "weather_lookup",
                 "name": "Demo weather lookup",
-                "description": "Returns clearly labelled demonstration weather information.",
+                "description": "Returns live current weather for a requested location.",
                 "tags": ["weather", "demo"],
                 "examples": ["What is the weather in London?"],
             }
