@@ -128,7 +128,7 @@ def agent_card(request: Request) -> dict:
         "skills": [
             {
                 "id": "weather_lookup",
-                "name": "Demo weather lookup",
+                "name": "demo_weather_lookup",
                 "description": "Returns live current weather for a requested location.",
                 "tags": ["weather", "demo"],
                 "examples": ["What is the weather in London?"],
