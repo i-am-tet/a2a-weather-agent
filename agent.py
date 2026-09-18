@@ -89,6 +89,13 @@ def agent_card(request: Request) -> dict:
         "description": "An A2A weather agent using live Open-Meteo forecast data.",
         "url": base_url + "/",
         "version": "0.1.0",
+        "supportedInterfaces": [
+            {
+                "url": base_url + "/",
+                "protocolBinding": "JSONRPC",
+                "protocolVersion": "0.3",
+            }
+        ],
         "capabilities": {"streaming": False, "pushNotifications": False},
         "defaultInputModes": ["text"],
         "defaultOutputModes": ["text"],
