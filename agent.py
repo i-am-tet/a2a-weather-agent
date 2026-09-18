@@ -8,11 +8,12 @@ import os
 import re
 import uuid
 import json
+import hmac
 from datetime import datetime, timezone
 from urllib.parse import urlencode
 from urllib.request import urlopen
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 
 
@@ -33,6 +34,22 @@ def get_json(url: str) -> dict:
     """Fetch JSON from a public weather endpoint with a short timeout."""
     with urlopen(url, timeout=10) as response:  # nosec B310: fixed HTTPS hosts below
         return json.load(response)
+
+
+def require_bearer_token(request: Request) -> None:
+    """Require the token stored as A2A_BEARER_TOKEN in the host environment."""
+    expected = os.environ.get("A2A_BEARER_TOKEN")
+    if not expected:
+        raise HTTPException(status_code=503, detail="A2A authentication is not configured.")
+
+    authorization = request.headers.get("authorization", "")
+    scheme, _, token = authorization.partition(" ")
+    if scheme.lower() != "bearer" or not hmac.compare_digest(token, expected):
+        raise HTTPException(
+            status_code=401,
+            detail="A valid Bearer token is required.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
 
 
 def location_from_question(question: str) -> str:
@@ -96,6 +113,14 @@ def agent_card(request: Request) -> dict:
                 "protocolVersion": "0.3",
             }
         ],
+        "securitySchemes": {
+            "bearerAuth": {
+                "type": "http",
+                "scheme": "bearer",
+                "bearerFormat": "opaque",
+            }
+        },
+        "security": [{"bearerAuth": []}],
         "capabilities": {"streaming": False, "pushNotifications": False},
         "defaultInputModes": ["text"],
         "defaultOutputModes": ["text"],
@@ -113,11 +138,13 @@ def agent_card(request: Request) -> dict:
 
 @app.get("/.well-known/agent-card.json")
 async def get_agent_card(request: Request):
+    require_bearer_token(request)
     return agent_card(request)
 
 
 @app.post("/")
 async def a2a_endpoint(request: Request):
+    require_bearer_token(request)
     payload = await request.json()
     request_id = payload.get("id")
     if payload.get("jsonrpc") != "2.0" or payload.get("method") != "message/send":
