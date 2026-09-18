@@ -139,7 +139,6 @@ def agent_card(request: Request) -> dict:
 
 @app.get("/.well-known/agent-card.json")
 async def get_agent_card(request: Request):
-    require_bearer_token(request)
     return agent_card(request)
 
 
