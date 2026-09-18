@@ -121,6 +121,7 @@ def agent_card(request: Request) -> dict:
             }
         },
         "security": [{"bearerAuth": []}],
+        "authentication": {"schemes": ["Bearer"]},
         "capabilities": {"streaming": False, "pushNotifications": False},
         "defaultInputModes": ["text"],
         "defaultOutputModes": ["text"],
