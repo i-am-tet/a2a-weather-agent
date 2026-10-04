@@ -51,6 +51,14 @@ WEATHER_CACHE_TTL_SECONDS = int(
     os.environ.get("WEATHER_CACHE_TTL_SECONDS", "600")
 )
 WEATHER_CACHE = {}
+KNOWN_LOCATION_QUERIES = {
+    "london": "London, United Kingdom",
+    "lisbon": "Lisbon, Portugal",
+    "madrid": "Madrid, Spain",
+    "malaga": "Malaga, Spain",
+    "seville": "Seville, Spain",
+    "valencia": "Valencia, Spain",
+}
 
 
 def get_json(url: str) -> dict:
@@ -140,12 +148,13 @@ def weather_for_places(places: list[str]) -> list[str]:
             continue
 
         try:
+            weather_query = KNOWN_LOCATION_QUERIES.get(cache_key, place)
             weather_url = (
                 "https://api.weatherapi.com/v1/current.json?"
                 + urlencode(
                     {
                         "key": WEATHER_API_KEY,
-                        "q": place,
+                        "q": weather_query,
                         "aqi": "no",
                     }
                 )
@@ -403,7 +412,7 @@ agent_card = AgentCard(
     description=(
         "An A2A weather agent using live WeatherAPI.com current conditions."
     ),
-    version="1.1.0",
+    version="1.1.1",
     provider={
         "organization": "A2A Weather Demo",
         "url": PUBLIC_URL,
