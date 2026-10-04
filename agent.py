@@ -221,6 +221,31 @@ class WeatherAgentExecutor(AgentExecutor):
     ) -> None:
         raise NotImplementedError("Cancellation is not supported.")
 
+class FusionA2AVersionCompatibilityMiddleware(BaseHTTPMiddleware):
+    """Normalize Fusion's legacy A2A header for the v1 HTTP route."""
+
+    async def dispatch(self, request: Request, call_next):
+        request_path = request.url.path.rstrip("/")
+
+        if (
+            request.method == "POST"
+            and request_path in {"/message:send", "/message%3Asend"}
+            and request.headers.get("a2a-version") == "0.3"
+        ):
+            request.scope["headers"] = [
+                (
+                    header_name,
+                    b"1.0"
+                    if header_name.lower() == b"a2a-version"
+                    else header_value,
+                )
+                for header_name, header_value in request.scope["headers"]
+            ]
+
+        return await call_next(request)
+
+
+class BearerAuthMiddleware(BaseHTTPMiddleware):
 
 class BearerAuthMiddleware(BaseHTTPMiddleware):
     """Require Bearer-token authentication for A2A operations."""
@@ -371,10 +396,10 @@ routes = [
 app = Starlette(
     routes=routes,
     middleware=[
+        Middleware(FusionA2AVersionCompatibilityMiddleware),
         Middleware(BearerAuthMiddleware),
     ],
 )
-
 
 if __name__ == "__main__":
     uvicorn.run(
