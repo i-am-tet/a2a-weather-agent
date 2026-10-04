@@ -221,28 +221,29 @@ class WeatherAgentExecutor(AgentExecutor):
     ) -> None:
         raise NotImplementedError("Cancellation is not supported.")
 
-class FusionA2AVersionCompatibilityMiddleware(BaseHTTPMiddleware):
-    """Normalize Fusion's legacy A2A header for the v1 HTTP route."""
+class FusionA2AVersionCompatibilityMiddleware:
+    """Normalize Fusion's legacy A2A header before request parsing."""
 
-    async def dispatch(self, request: Request, call_next):
-        request_path = request.url.path.rstrip("/")
+    def __init__(self, app):
+        self.app = app
 
-        if (
-            request.method == "POST"
-            and request_path in {"/message:send", "/message%3Asend"}
-            and request.headers.get("a2a-version") == "0.3"
-        ):
-            request.scope["headers"] = [
-                (
-                    header_name,
-                    b"1.0"
-                    if header_name.lower() == b"a2a-version"
-                    else header_value,
-                )
-                for header_name, header_value in request.scope["headers"]
-            ]
+    async def __call__(self, scope, receive, send):
+        if scope["type"] == "http" and scope.get("method") == "POST":
+            updated_headers = []
 
-        return await call_next(request)
+            for header_name, header_value in scope.get("headers", []):
+                if (
+                    header_name.lower() == b"a2a-version"
+                    and header_value.strip() == b"0.3"
+                ):
+                    updated_headers.append((header_name, b"1.0"))
+                else:
+                    updated_headers.append((header_name, header_value))
+
+            scope = dict(scope)
+            scope["headers"] = updated_headers
+
+        await self.app(scope, receive, send)
 
 
 class BearerAuthMiddleware(BaseHTTPMiddleware):
