@@ -96,6 +96,38 @@ def location_from_question(question: str) -> str:
     return match.group(1).strip(" ?.!") if match else ""
 
 
+def split_location_list(value: str) -> list[str]:
+    """Split a natural-language location list into usable place names."""
+
+    locations = []
+
+    for candidate in re.split(r"\s*,\s*|\s+and\s+", value):
+        place = re.sub(
+            r"^(?:and|the|a|an)\s+",
+            "",
+            candidate.strip(),
+            flags=re.I,
+        )
+
+        if re.fullmatch(r"[A-Za-z][A-Za-z .'-]{1,50}", place):
+            locations.append(place)
+
+    return locations[:5]
+
+
+def is_location_reference(place: str) -> bool:
+    """Return whether a phrase refers back to previously named locations."""
+
+    return bool(
+        re.fullmatch(
+            r"(?:each|every|all(?:\s+\w+)?|the\s+(?:requested|suggested))\s+"
+            r"(?:city|cities|destination|destinations|location|locations)",
+            place.strip(),
+            re.IGNORECASE,
+        )
+    )
+
+
 def locations_from_question(question: str) -> list[str]:
     """Extract one or more locations from a weather request."""
 
@@ -106,25 +138,28 @@ def locations_from_question(question: str) -> list[str]:
     )
 
     if match:
-        candidates = re.split(r"\s*,\s*|\s+and\s+", match.group(1))
-        locations = []
+        locations = split_location_list(match.group(1))
 
-        for candidate in candidates:
-            place = re.sub(
-                r"^(?:and|the|a|an)\s+",
-                "",
-                candidate.strip(),
-                flags=re.I,
-            )
+        if locations and not any(is_location_reference(place) for place in locations):
+            return locations
 
-            if re.fullmatch(r"[A-Za-z][A-Za-z .'-]{1,50}", place):
-                locations.append(place)
+    # Resolve phrases such as "weather in each city" from the explicit list
+    # introduced earlier in the same request.
+    named_list = re.search(
+        r"\b(?:include|suggest|keep|consider)\s+(.+?)"
+        r"(?=\s*,?\s+and\s+(?:check|compare)\b|[.?!])",
+        question,
+        re.IGNORECASE,
+    )
+
+    if named_list:
+        locations = split_location_list(named_list.group(1))
 
         if locations:
-            return locations[:5]
+            return locations
 
     place = location_from_question(question)
-    return [place] if place else []
+    return [place] if place and not is_location_reference(place) else []
 
 
 def weather_for_places(places: list[str]) -> list[str]:
@@ -412,7 +447,7 @@ agent_card = AgentCard(
     description=(
         "An A2A weather agent using live WeatherAPI.com current conditions."
     ),
-    version="1.1.1",
+    version="1.1.2",
     provider={
         "organization": "A2A Weather Demo",
         "url": PUBLIC_URL,
