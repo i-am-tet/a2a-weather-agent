@@ -8,7 +8,7 @@ import time
 import uuid
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
-from urllib.request import Request, urlopen
+from urllib.request import Request as URLRequest, urlopen
 
 import uvicorn
 from a2a.helpers import (
@@ -76,7 +76,7 @@ WEATHER_CODES = {
 def get_json(url: str) -> dict:
     """Retrieve JSON from an HTTPS endpoint."""
 
-    request = Request(
+    request = URLRequest(
         url,
         headers={
             "Accept": "application/json",
