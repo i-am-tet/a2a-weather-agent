@@ -4,9 +4,11 @@ import hmac
 import json
 import os
 import re
+import time
 import uuid
+from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
-from urllib.request import urlopen
+from urllib.request import Request, urlopen
 
 import uvicorn
 from a2a.helpers import (
@@ -74,8 +76,25 @@ WEATHER_CODES = {
 def get_json(url: str) -> dict:
     """Retrieve JSON from an HTTPS endpoint."""
 
-    with urlopen(url, timeout=10) as response:
-        return json.load(response)
+    request = Request(
+        url,
+        headers={
+            "Accept": "application/json",
+            "User-Agent": "starter-weather-agent/0.1",
+        },
+    )
+    last_error = None
+
+    for attempt in range(3):
+        try:
+            with urlopen(request, timeout=12) as response:
+                return json.load(response)
+        except (HTTPError, URLError, TimeoutError) as exc:
+            last_error = exc
+            if attempt < 2:
+                time.sleep(0.5 * (attempt + 1))
+
+    raise last_error
 
 
 def location_from_question(question: str) -> str:
@@ -182,15 +201,24 @@ def weather_reply(question: str) -> str:
             "What is the weather in London?"
         )
 
-    try:
-        reports = [weather_for_place(place) for place in places]
-        return "; ".join(reports) + ". Source: Open-Meteo."
+    reports = []
 
-    except Exception:
-        return (
-            "I could not retrieve live weather data right now. "
-            "Please try again in a moment."
-        )
+    for place in places:
+        try:
+            reports.append(weather_for_place(place))
+        except Exception as exc:
+            print(
+                f"Weather lookup failed for {place!r}: "
+                f"{type(exc).__name__}: {exc}",
+                flush=True,
+            )
+            reports.append(
+                f"I could not retrieve live weather data for {place} right now"
+            )
+
+    successful = [report for report in reports if report.startswith("Current weather")]
+    suffix = ". Source: Open-Meteo." if successful else "."
+    return "; ".join(reports) + suffix
 
 
 class WeatherAgentExecutor(AgentExecutor):
