@@ -89,77 +89,102 @@ def location_from_question(question: str) -> str:
     return match.group(1).strip(" ?.!") if match else ""
 
 
+def locations_from_question(question: str) -> list[str]:
+    """Extract one or more locations from a weather request."""
+
+    match = re.search(
+        r"(?:weather|conditions)[^.?!]*?\s(?:in|for)\s+([^.?!]+)",
+        question,
+        re.IGNORECASE,
+    )
+
+    if match:
+        candidates = re.split(r"\s*,\s*|\s+and\s+", match.group(1))
+        locations = []
+
+        for candidate in candidates:
+            place = re.sub(
+                r"^(?:and|the|a|an)\s+",
+                "",
+                candidate.strip(),
+                flags=re.I,
+            )
+
+            if re.fullmatch(r"[A-Za-z][A-Za-z .'-]{1,50}", place):
+                locations.append(place)
+
+        if locations:
+            return locations[:5]
+
+    place = location_from_question(question)
+    return [place] if place else []
+
+
+def weather_for_place(place: str) -> str:
+    """Return current Open-Meteo weather for one location."""
+
+    geocoding_url = (
+        "https://geocoding-api.open-meteo.com/v1/search?"
+        + urlencode(
+            {
+                "name": place,
+                "count": 1,
+                "language": "en",
+                "format": "json",
+            }
+        )
+    )
+
+    results = get_json(geocoding_url).get("results", [])
+
+    if not results:
+        return f"I could not find a location matching '{place}'."
+
+    location = results[0]
+
+    forecast_url = (
+        "https://api.open-meteo.com/v1/forecast?"
+        + urlencode(
+            {
+                "latitude": location["latitude"],
+                "longitude": location["longitude"],
+                "current": (
+                    "temperature_2m,apparent_temperature,"
+                    "weather_code,wind_speed_10m"
+                ),
+                "timezone": "auto",
+            }
+        )
+    )
+
+    current = get_json(forecast_url)["current"]
+    condition = WEATHER_CODES.get(current.get("weather_code"), "unknown conditions")
+    location_name = ", ".join(
+        part for part in (location.get("name"), location.get("country")) if part
+    )
+
+    return (
+        f"Current weather in {location_name}: {condition}, "
+        f"{current['temperature_2m']}°C "
+        f"(feels like {current['apparent_temperature']}°C), "
+        f"wind {current['wind_speed_10m']} km/h"
+    )
+
+
 def weather_reply(question: str) -> str:
     """Return current Open-Meteo weather for a requested location."""
 
-    place = location_from_question(question)
+    places = locations_from_question(question)
 
-    if not place:
+    if not places:
         return (
             "Tell me the city or location, for example: "
             "What is the weather in London?"
         )
 
     try:
-        geocoding_url = (
-            "https://geocoding-api.open-meteo.com/v1/search?"
-            + urlencode(
-                {
-                    "name": place,
-                    "count": 1,
-                    "language": "en",
-                    "format": "json",
-                }
-            )
-        )
-
-        results = get_json(geocoding_url).get("results", [])
-
-        if not results:
-            return (
-                f"I could not find a location matching '{place}'. "
-                "Please include a city and country."
-            )
-
-        location = results[0]
-
-        forecast_url = (
-            "https://api.open-meteo.com/v1/forecast?"
-            + urlencode(
-                {
-                    "latitude": location["latitude"],
-                    "longitude": location["longitude"],
-                    "current": (
-                        "temperature_2m,apparent_temperature,"
-                        "weather_code,wind_speed_10m"
-                    ),
-                    "timezone": "auto",
-                }
-            )
-        )
-
-        current = get_json(forecast_url)["current"]
-        condition = WEATHER_CODES.get(
-            current.get("weather_code"),
-            "unknown conditions",
-        )
-
-        location_name = ", ".join(
-            part
-            for part in (
-                location.get("name"),
-                location.get("country"),
-            )
-            if part
-        )
-
-        return (
-            f"Current weather in {location_name}: {condition}, "
-            f"{current['temperature_2m']}°C "
-            f"(feels like {current['apparent_temperature']}°C), "
-            f"wind {current['wind_speed_10m']} km/h. "
-            "Source: Open-Meteo."
-        )
+        reports = [weather_for_place(place) for place in places]
+        return "; ".join(reports) + ". Source: Open-Meteo."
 
     except Exception:
         return (
