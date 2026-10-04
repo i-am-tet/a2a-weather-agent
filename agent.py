@@ -246,8 +246,6 @@ class FusionA2AVersionCompatibilityMiddleware(BaseHTTPMiddleware):
 
 
 class BearerAuthMiddleware(BaseHTTPMiddleware):
-
-class BearerAuthMiddleware(BaseHTTPMiddleware):
     """Require Bearer-token authentication for A2A operations."""
 
     PUBLIC_PATHS = {
