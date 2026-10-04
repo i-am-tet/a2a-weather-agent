@@ -4,6 +4,7 @@ import hmac
 import json
 import os
 import re
+import uuid
 from urllib.parse import urlencode
 from urllib.request import urlopen
 
@@ -263,7 +264,7 @@ class FusionA2AVersionCompatibilityMiddleware:
 
     @staticmethod
     async def _fresh_task_request(receive):
-        """Remove stale task identity from an independent weather lookup."""
+        """Normalize Fusion's generated request into a fresh weather lookup."""
 
         first_event = await receive()
         body = first_event.get("body", b"")
@@ -274,6 +275,27 @@ class FusionA2AVersionCompatibilityMiddleware:
                 message = payload.get("message")
 
                 if isinstance(message, dict):
+                    message_id = message.get("messageId")
+
+                    # The generated Fusion A2A connector can put the model's
+                    # intended weather question in messageId while binding the
+                    # workflow's original first turn to parts[0].text.  A2A
+                    # message IDs are opaque identifiers, so a natural-language
+                    # value is safe to reinterpret as the actual user message.
+                    if (
+                        isinstance(message_id, str)
+                        and re.search(r"\s", message_id.strip())
+                    ):
+                        parts = message.get("parts")
+
+                        if isinstance(parts, list) and parts:
+                            first_part = parts[0]
+
+                            if isinstance(first_part, dict):
+                                first_part["text"] = message_id.strip()
+
+                        message["messageId"] = str(uuid.uuid4())
+
                     message.pop("taskId", None)
                     message.pop("contextId", None)
                     first_event = dict(first_event)
