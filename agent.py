@@ -222,7 +222,7 @@ class WeatherAgentExecutor(AgentExecutor):
         raise NotImplementedError("Cancellation is not supported.")
 
 class FusionA2AVersionCompatibilityMiddleware:
-    """Normalize Fusion's legacy A2A header before request parsing."""
+    """Supply the A2A 1.0 header omitted by Fusion."""
 
     def __init__(self, app):
         self.app = app
@@ -230,15 +230,17 @@ class FusionA2AVersionCompatibilityMiddleware:
     async def __call__(self, scope, receive, send):
         if scope["type"] == "http" and scope.get("method") == "POST":
             updated_headers = []
+            version_header_found = False
 
             for header_name, header_value in scope.get("headers", []):
-                if (
-                    header_name.lower() == b"a2a-version"
-                    and header_value.strip() == b"0.3"
-                ):
+                if header_name.lower() == b"a2a-version":
                     updated_headers.append((header_name, b"1.0"))
+                    version_header_found = True
                 else:
                     updated_headers.append((header_name, header_value))
+
+            if not version_header_found:
+                updated_headers.append((b"a2a-version", b"1.0"))
 
             scope = dict(scope)
             scope["headers"] = updated_headers
