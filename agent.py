@@ -1,6 +1,5 @@
 """A2A 1.0 weather agent using live Open-Meteo data."""
 
-import base64
 import hmac
 import json
 import os
@@ -223,8 +222,8 @@ class WeatherAgentExecutor(AgentExecutor):
         raise NotImplementedError("Cancellation is not supported.")
 
 
-class BasicAuthMiddleware(BaseHTTPMiddleware):
-    """Require Basic authentication for A2A operations."""
+class BearerAuthMiddleware(BaseHTTPMiddleware):
+    """Require Bearer-token authentication for A2A operations."""
 
     PUBLIC_PATHS = {
         "/.well-known/agent-card.json",
@@ -235,37 +234,25 @@ class BasicAuthMiddleware(BaseHTTPMiddleware):
         if request.url.path in self.PUBLIC_PATHS:
             return await call_next(request)
 
-        expected_username = os.environ.get("A2A_BASIC_USERNAME")
-        expected_password = os.environ.get("A2A_BASIC_PASSWORD")
+        expected_token = os.environ.get("A2A_BEARER_TOKEN")
 
-        if not expected_username or not expected_password:
+        if not expected_token:
             return JSONResponse(
-                {"detail": "A2A Basic authentication is not configured."},
+                {"detail": "A2A Bearer authentication is not configured."},
                 status_code=503,
             )
 
         authorization = request.headers.get("authorization", "")
 
-        if not authorization.lower().startswith("basic "):
+        if not authorization.lower().startswith("bearer "):
             return self.unauthorized()
 
-        try:
-            encoded = authorization.split(" ", 1)[1]
-            decoded = base64.b64decode(encoded).decode("utf-8")
-            username, password = decoded.split(":", 1)
-        except (ValueError, UnicodeDecodeError):
+        supplied_token = authorization.split(" ", 1)[1].strip()
+
+        if not supplied_token:
             return self.unauthorized()
 
-        username_matches = hmac.compare_digest(
-            username,
-            expected_username,
-        )
-        password_matches = hmac.compare_digest(
-            password,
-            expected_password,
-        )
-
-        if not username_matches or not password_matches:
+        if not hmac.compare_digest(supplied_token, expected_token):
             return self.unauthorized()
 
         return await call_next(request)
@@ -273,9 +260,9 @@ class BasicAuthMiddleware(BaseHTTPMiddleware):
     @staticmethod
     def unauthorized() -> Response:
         return JSONResponse(
-            {"detail": "Valid Basic authentication is required."},
+            {"detail": "A valid Bearer token is required."},
             status_code=401,
-            headers={"WWW-Authenticate": 'Basic realm="A2A Weather Agent"'},
+            headers={"WWW-Authenticate": "Bearer"},
         )
 
 
@@ -319,19 +306,20 @@ agent_card = AgentCard(
         ),
     ],
     security_schemes={
-        "basic_auth": {
+        "bearer_auth": {
             "http_auth_security_scheme": {
                 "description": (
-                    "HTTP Basic authentication for A2A operations."
+                    "Bearer token authentication for A2A operations."
                 ),
-                "scheme": "Basic",
+                "scheme": "Bearer",
+                "bearer_format": "opaque",
             }
         }
     },
     security_requirements=[
         {
             "schemes": {
-                "basic_auth": {
+                "bearer_auth": {
                     "list": [],
                 }
             }
@@ -383,7 +371,7 @@ routes = [
 app = Starlette(
     routes=routes,
     middleware=[
-        Middleware(BasicAuthMiddleware),
+        Middleware(BearerAuthMiddleware),
     ],
 )
 
