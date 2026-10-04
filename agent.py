@@ -222,13 +222,21 @@ class WeatherAgentExecutor(AgentExecutor):
         raise NotImplementedError("Cancellation is not supported.")
 
 class FusionA2AVersionCompatibilityMiddleware:
-    """Supply the A2A 1.0 header omitted by Fusion."""
+    """Normalize Fusion requests for this stateless weather agent."""
 
     def __init__(self, app):
         self.app = app
 
     async def __call__(self, scope, receive, send):
-        if scope["type"] == "http" and scope.get("path") not in {"/.well-known/agent-card.json", "/health"}:
+        public_paths = {
+            "/.well-known/agent-card.json",
+            "/health",
+        }
+
+        if (
+            scope["type"] == "http"
+            and scope.get("path") not in public_paths
+        ):
             updated_headers = []
             version_header_found = False
 
@@ -245,7 +253,46 @@ class FusionA2AVersionCompatibilityMiddleware:
             scope = dict(scope)
             scope["headers"] = updated_headers
 
+            if (
+                scope.get("method") == "POST"
+                and scope.get("path") == "/message:send"
+            ):
+                receive = await self._fresh_task_request(receive)
+
         await self.app(scope, receive, send)
+
+    @staticmethod
+    async def _fresh_task_request(receive):
+        """Remove stale task identity from an independent weather lookup."""
+
+        first_event = await receive()
+        body = first_event.get("body", b"")
+
+        if body:
+            try:
+                payload = json.loads(body)
+                message = payload.get("message")
+
+                if isinstance(message, dict):
+                    message.pop("taskId", None)
+                    message.pop("contextId", None)
+                    first_event = dict(first_event)
+                    first_event["body"] = json.dumps(payload).encode("utf-8")
+            except (TypeError, ValueError):
+                pass
+
+        delivered = False
+
+        async def normalized_receive():
+            nonlocal delivered
+
+            if not delivered:
+                delivered = True
+                return first_event
+
+            return await receive()
+
+        return normalized_receive
 
 
 class BearerAuthMiddleware(BaseHTTPMiddleware):
