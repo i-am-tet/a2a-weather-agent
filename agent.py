@@ -1,4 +1,4 @@
-"""A2A 1.0 weather agent using live Open-Meteo data."""
+"""A2A 1.0 weather agent using live WeatherAPI.com data."""
 
 import hmac
 import json
@@ -46,41 +46,11 @@ PUBLIC_URL = os.environ.get(
     "A2A_PUBLIC_URL",
     "https://a2a-weather-agent-bca5.onrender.com",
 ).rstrip("/")
-
-
-WEATHER_CODES = {
-    0: "clear sky",
-    1: "mainly clear",
-    2: "partly cloudy",
-    3: "overcast",
-    45: "foggy",
-    48: "rime fog",
-    51: "light drizzle",
-    53: "drizzle",
-    55: "dense drizzle",
-    61: "light rain",
-    63: "rain",
-    65: "heavy rain",
-    71: "light snow",
-    73: "snow",
-    75: "heavy snow",
-    80: "rain showers",
-    81: "rain showers",
-    82: "violent rain showers",
-    95: "thunderstorm",
-    96: "thunderstorm with hail",
-    99: "thunderstorm with heavy hail",
-}
-
-
-KNOWN_LOCATIONS = {
-    "london": ("London", "United Kingdom", 51.5072, -0.1276),
-    "valencia": ("Valencia", "Spain", 39.4699, -0.3763),
-    "seville": ("Seville", "Spain", 37.3891, -5.9845),
-    "lisbon": ("Lisbon", "Portugal", 38.7223, -9.1393),
-    "madrid": ("Madrid", "Spain", 40.4168, -3.7038),
-    "malaga": ("Malaga", "Spain", 36.7213, -4.4214),
-}
+WEATHER_API_KEY = os.environ.get("WEATHER_API_KEY", "").strip()
+WEATHER_CACHE_TTL_SECONDS = int(
+    os.environ.get("WEATHER_CACHE_TTL_SECONDS", "600")
+)
+WEATHER_CACHE = {}
 
 
 def get_json(url: str) -> dict:
@@ -149,123 +119,72 @@ def locations_from_question(question: str) -> list[str]:
     return [place] if place else []
 
 
-def resolve_location(place: str) -> dict:
-    """Resolve a place while avoiding repeated geocoding for demo cities."""
-
-    known = KNOWN_LOCATIONS.get(place.casefold())
-
-    if known:
-        name, country, latitude, longitude = known
-        return {
-            "name": name,
-            "country": country,
-            "latitude": latitude,
-            "longitude": longitude,
-        }
-
-    geocoding_url = (
-        "https://geocoding-api.open-meteo.com/v1/search?"
-        + urlencode(
-            {
-                "name": place,
-                "count": 1,
-                "language": "en",
-                "format": "json",
-            }
-        )
-    )
-
-    results = get_json(geocoding_url).get("results", [])
-
-    if not results:
-        raise ValueError(f"No location matched {place!r}")
-
-    return results[0]
-
-
 def weather_for_places(places: list[str]) -> list[str]:
-    """Return current Open-Meteo weather using one batched forecast call."""
+    """Return current WeatherAPI.com conditions for each requested place."""
 
     reports = {}
-    locations = []
+
+    if not WEATHER_API_KEY:
+        print("WEATHER_API_KEY is not configured.", flush=True)
+        return [
+            f"I could not retrieve live weather data for {place} right now"
+            for place in places
+        ]
 
     for place in places:
+        cache_key = place.casefold()
+        cached = WEATHER_CACHE.get(cache_key)
+
+        if cached and time.monotonic() - cached[0] < WEATHER_CACHE_TTL_SECONDS:
+            reports[place] = cached[1]
+            continue
+
         try:
-            locations.append((place, resolve_location(place)))
+            weather_url = (
+                "https://api.weatherapi.com/v1/current.json?"
+                + urlencode(
+                    {
+                        "key": WEATHER_API_KEY,
+                        "q": place,
+                        "aqi": "no",
+                    }
+                )
+            )
+            payload = get_json(weather_url)
+            location = payload["location"]
+            current = payload["current"]
+            condition = current.get("condition", {}).get(
+                "text",
+                "unknown conditions",
+            )
+            location_name = ", ".join(
+                part
+                for part in (location.get("name"), location.get("country"))
+                if part
+            )
+            report = (
+                f"Current weather in {location_name}: {condition.lower()}, "
+                f"{current['temp_c']}°C "
+                f"(feels like {current['feelslike_c']}°C), "
+                f"wind {current['wind_kph']} km/h"
+            )
+            reports[place] = report
+            WEATHER_CACHE[cache_key] = (time.monotonic(), report)
         except Exception as exc:
             print(
-                f"Location lookup failed for {place!r}: "
+                f"WeatherAPI.com lookup failed for {place!r}: "
                 f"{type(exc).__name__}: {exc}",
                 flush=True,
             )
-            reports[place] = f"I could not find a location matching '{place}'"
-
-    if locations:
-        forecast_url = (
-            "https://api.open-meteo.com/v1/forecast?"
-            + urlencode(
-                {
-                    "latitude": ",".join(
-                        str(location["latitude"])
-                        for _, location in locations
-                    ),
-                    "longitude": ",".join(
-                        str(location["longitude"])
-                        for _, location in locations
-                    ),
-                    "current": (
-                        "temperature_2m,apparent_temperature,"
-                        "weather_code,wind_speed_10m"
-                    ),
-                    "timezone": "auto",
-                }
+            reports[place] = (
+                f"I could not retrieve live weather data for {place} right now"
             )
-        )
-
-        try:
-            forecast_payload = get_json(forecast_url)
-            forecasts = (
-                forecast_payload
-                if isinstance(forecast_payload, list)
-                else [forecast_payload]
-            )
-
-            if len(forecasts) != len(locations):
-                raise ValueError("Open-Meteo returned an incomplete batch")
-
-            for (place, location), forecast in zip(locations, forecasts):
-                current = forecast["current"]
-                condition = WEATHER_CODES.get(
-                    current.get("weather_code"),
-                    "unknown conditions",
-                )
-                location_name = ", ".join(
-                    part
-                    for part in (location.get("name"), location.get("country"))
-                    if part
-                )
-                reports[place] = (
-                    f"Current weather in {location_name}: {condition}, "
-                    f"{current['temperature_2m']}°C "
-                    f"(feels like {current['apparent_temperature']}°C), "
-                    f"wind {current['wind_speed_10m']} km/h"
-                )
-        except Exception as exc:
-            print(
-                f"Batched weather lookup failed for {places!r}: "
-                f"{type(exc).__name__}: {exc}",
-                flush=True,
-            )
-
-            for place, _ in locations:
-                reports[place] = (
-                    f"I could not retrieve live weather data for {place} right now"
-                )
 
     return [reports[place] for place in places]
 
+
 def weather_reply(question: str) -> str:
-    """Return current Open-Meteo weather for a requested location."""
+    """Return current WeatherAPI.com weather for requested locations."""
 
     places = locations_from_question(question)
 
@@ -278,7 +197,7 @@ def weather_reply(question: str) -> str:
     reports = weather_for_places(places)
 
     successful = [report for report in reports if report.startswith("Current weather")]
-    suffix = ". Source: Open-Meteo." if successful else "."
+    suffix = ". Source: WeatherAPI.com." if successful else "."
     return "; ".join(reports) + suffix
 
 
@@ -482,9 +401,9 @@ async def health(_: Request) -> JSONResponse:
 agent_card = AgentCard(
     name="Starter Weather Agent",
     description=(
-        "An A2A weather agent using live Open-Meteo current-weather data."
+        "An A2A weather agent using live WeatherAPI.com current conditions."
     ),
-    version="1.0.0",
+    version="1.1.0",
     provider={
         "organization": "A2A Weather Demo",
         "url": PUBLIC_URL,
@@ -543,7 +462,7 @@ agent_card = AgentCard(
             ),
             tags=[
                 "weather",
-                "open-meteo",
+                "weatherapi.com",
                 "current conditions",
             ],
             examples=[
