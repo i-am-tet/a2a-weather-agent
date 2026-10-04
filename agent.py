@@ -73,6 +73,16 @@ WEATHER_CODES = {
 }
 
 
+KNOWN_LOCATIONS = {
+    "london": ("London", "United Kingdom", 51.5072, -0.1276),
+    "valencia": ("Valencia", "Spain", 39.4699, -0.3763),
+    "seville": ("Seville", "Spain", 37.3891, -5.9845),
+    "lisbon": ("Lisbon", "Portugal", 38.7223, -9.1393),
+    "madrid": ("Madrid", "Spain", 40.4168, -3.7038),
+    "malaga": ("Malaga", "Spain", 36.7213, -4.4214),
+}
+
+
 def get_json(url: str) -> dict:
     """Retrieve JSON from an HTTPS endpoint."""
 
@@ -139,8 +149,19 @@ def locations_from_question(question: str) -> list[str]:
     return [place] if place else []
 
 
-def weather_for_place(place: str) -> str:
-    """Return current Open-Meteo weather for one location."""
+def resolve_location(place: str) -> dict:
+    """Resolve a place while avoiding repeated geocoding for demo cities."""
+
+    known = KNOWN_LOCATIONS.get(place.casefold())
+
+    if known:
+        name, country, latitude, longitude = known
+        return {
+            "name": name,
+            "country": country,
+            "latitude": latitude,
+            "longitude": longitude,
+        }
 
     geocoding_url = (
         "https://geocoding-api.open-meteo.com/v1/search?"
@@ -157,38 +178,91 @@ def weather_for_place(place: str) -> str:
     results = get_json(geocoding_url).get("results", [])
 
     if not results:
-        return f"I could not find a location matching '{place}'."
+        raise ValueError(f"No location matched {place!r}")
 
-    location = results[0]
+    return results[0]
 
-    forecast_url = (
-        "https://api.open-meteo.com/v1/forecast?"
-        + urlencode(
-            {
-                "latitude": location["latitude"],
-                "longitude": location["longitude"],
-                "current": (
-                    "temperature_2m,apparent_temperature,"
-                    "weather_code,wind_speed_10m"
-                ),
-                "timezone": "auto",
-            }
+
+def weather_for_places(places: list[str]) -> list[str]:
+    """Return current Open-Meteo weather using one batched forecast call."""
+
+    reports = {}
+    locations = []
+
+    for place in places:
+        try:
+            locations.append((place, resolve_location(place)))
+        except Exception as exc:
+            print(
+                f"Location lookup failed for {place!r}: "
+                f"{type(exc).__name__}: {exc}",
+                flush=True,
+            )
+            reports[place] = f"I could not find a location matching '{place}'"
+
+    if locations:
+        forecast_url = (
+            "https://api.open-meteo.com/v1/forecast?"
+            + urlencode(
+                {
+                    "latitude": ",".join(
+                        str(location["latitude"])
+                        for _, location in locations
+                    ),
+                    "longitude": ",".join(
+                        str(location["longitude"])
+                        for _, location in locations
+                    ),
+                    "current": (
+                        "temperature_2m,apparent_temperature,"
+                        "weather_code,wind_speed_10m"
+                    ),
+                    "timezone": "auto",
+                }
+            )
         )
-    )
 
-    current = get_json(forecast_url)["current"]
-    condition = WEATHER_CODES.get(current.get("weather_code"), "unknown conditions")
-    location_name = ", ".join(
-        part for part in (location.get("name"), location.get("country")) if part
-    )
+        try:
+            forecast_payload = get_json(forecast_url)
+            forecasts = (
+                forecast_payload
+                if isinstance(forecast_payload, list)
+                else [forecast_payload]
+            )
 
-    return (
-        f"Current weather in {location_name}: {condition}, "
-        f"{current['temperature_2m']}°C "
-        f"(feels like {current['apparent_temperature']}°C), "
-        f"wind {current['wind_speed_10m']} km/h"
-    )
+            if len(forecasts) != len(locations):
+                raise ValueError("Open-Meteo returned an incomplete batch")
 
+            for (place, location), forecast in zip(locations, forecasts):
+                current = forecast["current"]
+                condition = WEATHER_CODES.get(
+                    current.get("weather_code"),
+                    "unknown conditions",
+                )
+                location_name = ", ".join(
+                    part
+                    for part in (location.get("name"), location.get("country"))
+                    if part
+                )
+                reports[place] = (
+                    f"Current weather in {location_name}: {condition}, "
+                    f"{current['temperature_2m']}°C "
+                    f"(feels like {current['apparent_temperature']}°C), "
+                    f"wind {current['wind_speed_10m']} km/h"
+                )
+        except Exception as exc:
+            print(
+                f"Batched weather lookup failed for {places!r}: "
+                f"{type(exc).__name__}: {exc}",
+                flush=True,
+            )
+
+            for place, _ in locations:
+                reports[place] = (
+                    f"I could not retrieve live weather data for {place} right now"
+                )
+
+    return [reports[place] for place in places]
 
 def weather_reply(question: str) -> str:
     """Return current Open-Meteo weather for a requested location."""
@@ -201,20 +275,7 @@ def weather_reply(question: str) -> str:
             "What is the weather in London?"
         )
 
-    reports = []
-
-    for place in places:
-        try:
-            reports.append(weather_for_place(place))
-        except Exception as exc:
-            print(
-                f"Weather lookup failed for {place!r}: "
-                f"{type(exc).__name__}: {exc}",
-                flush=True,
-            )
-            reports.append(
-                f"I could not retrieve live weather data for {place} right now"
-            )
+    reports = weather_for_places(places)
 
     successful = [report for report in reports if report.startswith("Current weather")]
     suffix = ". Source: Open-Meteo." if successful else "."
